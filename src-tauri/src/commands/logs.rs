@@ -37,17 +37,6 @@ fn parse_request_from_log_line(line: &str, counter: &AtomicU64) -> Option<Reques
         return None;
     }
 
-    let is_trackable = line.contains("/chat/completions")
-        || line.contains("/v1/messages")
-        || line.contains("/completions")
-        || line.contains("/v1beta")
-        || line.contains(":generateContent")
-        || line.contains(":streamGenerateContent");
-
-    if !is_trackable {
-        return None;
-    }
-
     lazy_static::lazy_static! {
         static ref NEW_FMT: regex::Regex = regex::Regex::new(
             r#"\|\s+([a-f0-9]{8}|-{8})\s+\|\s+(\d+)\s+\|\s+([^\s]+)\s+\|\s+[^\s]+\s+\|\s+(\w+)\s+\"([^\"]+)\""#
@@ -188,11 +177,17 @@ pub async fn get_proxy_request_logs(
         .map_err(|e| format!("Failed to parse logs response: {}", e))?;
 
     let counter = AtomicU64::new(0);
-    let requests: Vec<RequestLog> = api_response
+    let mut requests: Vec<RequestLog> = api_response
         .lines
         .iter()
         .filter_map(|line| parse_request_from_log_line(line, &counter))
         .collect();
+
+    // If no requests were parsed from server logs, fall back to local history.json
+    if requests.is_empty() {
+        let history = crate::helpers::history::load_request_history();
+        requests = history.requests;
+    }
 
     Ok(requests)
 }
@@ -368,8 +363,8 @@ pub fn get_request_error_logs() -> Result<Vec<String>, String> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name().to_string_lossy().to_string();
-            // Include error logs and any non-main log files
-            if name.contains("error") || (name.ends_with(".log") && name != "main.log") {
+            // Only include files that contain "error" in the name
+            if name.contains("error") && name.ends_with(".log") {
                 Some(name)
             } else {
                 None
