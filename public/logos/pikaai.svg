@@ -1,0 +1,17 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pikaaiGradient" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#06B6D4"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="24" stroke="url(#pikaaiGradient)" stroke-width="4"/>
+  <circle cx="24" cy="26" r="2" fill="#06B6D4"/>
+  <circle cx="40" cy="26" r="2" fill="#0EA5E9"/>
+  <circle cx="28" cy="42" r="2" fill="#0EA5E9"/>
+  <circle cx="40" cy="40" r="2" fill="#06B6D4"/>
+  <path d="M32 14C25.372 14 20 19.372 20 26" stroke="url(#pikaaiGradient)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 14C38.628 14 44 19.372 44 26" stroke="url(#pikaaiGradient)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M24 46C26.5 48 29.5 49 32.8 49" stroke="url(#pikaaiGradient)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M46 30L34 32L38 20L24 34L36 32L32 46L46 30Z" fill="url(#pikaaiGradient)"/>
+</svg>

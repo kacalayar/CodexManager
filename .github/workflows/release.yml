@@ -1,0 +1,371 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release (${{ matrix.os }})
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Download CLIProxyAPIPlus binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          mkdir -p src-tauri/binaries
+
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              ASSET_PATTERN="*darwin_arm64.tar.gz"
+              BINARY="cli-proxy-api-aarch64-apple-darwin"
+              ARCHIVE_TYPE="tar"
+              ;;
+            x86_64-apple-darwin)
+              ASSET_PATTERN="*darwin_amd64.tar.gz"
+              BINARY="cli-proxy-api-x86_64-apple-darwin"
+              ARCHIVE_TYPE="tar"
+              ;;
+            x86_64-unknown-linux-gnu)
+              ASSET_PATTERN="*linux_amd64.tar.gz"
+              BINARY="cli-proxy-api-x86_64-unknown-linux-gnu"
+              ARCHIVE_TYPE="tar"
+              ;;
+            x86_64-pc-windows-msvc)
+              ASSET_PATTERN="*windows_amd64.zip"
+              BINARY="cli-proxy-api-x86_64-pc-windows-msvc.exe"
+              ARCHIVE_TYPE="zip"
+              ;;
+            *)
+              echo "Unknown target: ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          echo "Downloading CLIProxyAPIPlus for ${{ matrix.target }}..."
+          cd /tmp
+          gh release download --repo router-for-me/CLIProxyAPIPlus --pattern "$ASSET_PATTERN" --clobber
+
+          ARCHIVE=$(ls $ASSET_PATTERN 2>/dev/null | head -1)
+          echo "Extracting $ARCHIVE..."
+
+          if [ "$ARCHIVE_TYPE" = "zip" ]; then
+            unzip -q "$ARCHIVE"
+          else
+            tar -xzf "$ARCHIVE"
+          fi
+
+          # List extracted contents for debugging
+          ls -la
+
+          # CLIProxyAPIPlus uses platform-suffixed names like cli-proxy-api-x86_64-pc-windows-msvc.exe
+          # Detect the correct binary based on platform
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              SRC_BINARY="cli-proxy-api-aarch64-apple-darwin"
+              ;;
+            x86_64-apple-darwin)
+              SRC_BINARY="cli-proxy-api-x86_64-apple-darwin"
+              ;;
+            x86_64-unknown-linux-gnu)
+              SRC_BINARY="cli-proxy-api-x86_64-unknown-linux-gnu"
+              ;;
+            x86_64-pc-windows-msvc)
+              SRC_BINARY="cli-proxy-api-x86_64-pc-windows-msvc.exe"
+              ;;
+          esac
+
+          if [ -f "$SRC_BINARY" ]; then
+            echo "Found platform-specific binary: $SRC_BINARY"
+            cp "$SRC_BINARY" "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY" 2>/dev/null || true
+          # Fallback to generic naming (older releases)
+          elif [ -f "cli-proxy-api-plus" ]; then
+            cp cli-proxy-api-plus "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "cli-proxy-api-plus.exe" ]; then
+            cp cli-proxy-api-plus.exe "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "CLIProxyAPIPlus" ]; then
+            cp CLIProxyAPIPlus "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "CLIProxyAPIPlus.exe" ]; then
+            cp CLIProxyAPIPlus.exe "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "CLIProxyAPI" ]; then
+            cp CLIProxyAPI "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "CLIProxyAPI.exe" ]; then
+            cp CLIProxyAPI.exe "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "cli-proxy-api.exe" ]; then
+            cp cli-proxy-api.exe "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          elif [ -f "cli-proxy-api" ]; then
+            cp cli-proxy-api "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+          else
+            # Recursive search fallback in case binary is nested in subdirectory
+            FOUND=$(find . -type f \( -name "cli-proxy-api-plus" -o -name "CLIProxyAPIPlus" -o -name "CLIProxyAPI" -o -name "cli-proxy-api" -o -name "$SRC_BINARY" \) ! -name "*.tar.gz" ! -name "*.zip" ! -name "*.tgz" | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "Found binary via recursive search: $FOUND"
+              cp "$FOUND" "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+              chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY" 2>/dev/null || true
+            else
+              echo "ERROR: Binary not found!"
+              echo "Looking for: $SRC_BINARY"
+              ls -laR
+              exit 1
+            fi
+          fi
+
+          echo "Downloaded:"
+          ls -la "$GITHUB_WORKSPACE/src-tauri/binaries/"
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPIMAGELAUNCHER_DISABLE: 1
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "CodexManager ${{ github.ref_name }}"
+          releaseBody: |
+            ## What's New
+
+            See the [commits](${{ github.server_url }}/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
+
+            ## Downloads
+
+            | Platform | Download |
+            |----------|----------|
+            | macOS (Apple Silicon) | `.dmg` (aarch64) |
+            | macOS (Intel) | `.dmg` (x64) |
+            | Windows | `.exe` installer |
+            | Windows (Portable) | `.zip` (no install required) |
+            | Linux | `.deb` package |
+          releaseDraft: false
+          prerelease: false
+          updaterJsonPreferNsis: true
+          args: --target ${{ matrix.target }}
+
+      - name: Create portable Windows zip
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}"
+          $exePath = "src-tauri/target/x86_64-pc-windows-msvc/release/CodexManager.exe"
+
+          if (Test-Path $exePath) {
+            $zipName = "CodexManager_${version}_x64_portable.zip"
+            Compress-Archive -Path $exePath -DestinationPath $zipName
+            gh release upload $version $zipName --clobber
+            Write-Host "Uploaded portable zip: $zipName"
+          } else {
+            Write-Warning "Executable not found at $exePath"
+            Get-ChildItem -Recurse -Filter "*.exe" src-tauri/target | Select-Object FullName
+          }
+
+  generate-changelog:
+    name: Generate Changelog
+    needs: release
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    outputs:
+      changelog: ${{ steps.changelog.outputs.changelog }}
+      sidecar_version: ${{ steps.changelog.outputs.sidecar_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog from commits and CLIProxyAPIPlus
+        id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CURRENT_TAG="${{ github.ref_name }}"
+
+          echo "Previous tag: $PREV_TAG"
+          echo "Current tag: $CURRENT_TAG"
+
+          # Generate CodexManager commits changelog
+          CodexManager_CHANGES=""
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --oneline "$PREV_TAG..$CURRENT_TAG" --pretty=format:"- %s" 2>/dev/null || echo "")
+            if [ -n "$COMMITS" ]; then
+              CodexManager_CHANGES="$COMMITS"
+            fi
+          fi
+
+          # Get CLIProxyAPIPlus latest release info
+          SIDECAR_RELEASE=$(gh release view --repo router-for-me/CLIProxyAPIPlus --json tagName,body 2>/dev/null || echo "{}")
+          SIDECAR_VERSION=$(echo "$SIDECAR_RELEASE" | jq -r '.tagName // "unknown"')
+          SIDECAR_BODY=$(echo "$SIDECAR_RELEASE" | jq -r '.body // ""')
+
+          echo "sidecar_version=$SIDECAR_VERSION" >> $GITHUB_OUTPUT
+
+          # Extract key fixes/features from CLIProxyAPIPlus changelog (filter out merge commits)
+          SIDECAR_HIGHLIGHTS=""
+          if [ -n "$SIDECAR_BODY" ]; then
+            # Extract lines with fix/feat/Fixed and format them
+            SIDECAR_HIGHLIGHTS=$(echo "$SIDECAR_BODY" | grep -E '(fix|feat|Fixed|refactor)\(' | head -10 | sed 's/^- \[.*\] /- /' | sed 's/^/- /' || echo "")
+          fi
+
+          # Build full changelog
+          CHANGELOG="### CodexManager Changes"
+          if [ -n "$CodexManager_CHANGES" ]; then
+            CHANGELOG="$CHANGELOG
+          $CodexManager_CHANGES"
+          else
+            CHANGELOG="$CHANGELOG
+          - Release $CURRENT_TAG"
+          fi
+
+          CHANGELOG="$CHANGELOG
+
+          ### Sidecar: CLIProxyAPIPlus $SIDECAR_VERSION"
+
+          if [ -n "$SIDECAR_HIGHLIGHTS" ]; then
+            CHANGELOG="$CHANGELOG
+          $SIDECAR_HIGHLIGHTS"
+          fi
+
+          # Escape for GitHub output
+          CHANGELOG="${CHANGELOG//'%'/'%25'}"
+          CHANGELOG="${CHANGELOG//$'\n'/'%0A'}"
+          CHANGELOG="${CHANGELOG//$'\r'/'%0D'}"
+
+          echo "changelog=$CHANGELOG" >> $GITHUB_OUTPUT
+
+      - name: Update release body with changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
+          SIDECAR_VERSION: ${{ steps.changelog.outputs.sidecar_version }}
+        run: |
+          # Decode the changelog (it was percent-encoded)
+          DECODED_CHANGELOG=$(echo "$CHANGELOG" | sed 's/%0A/\n/g' | sed 's/%0D//g' | sed 's/%25/%/g')
+
+          # Build release body using printf to avoid HEREDOC issues
+          {
+            echo "## What's New"
+            echo ""
+            echo "$DECODED_CHANGELOG"
+            echo ""
+            echo "## Downloads"
+            echo ""
+            echo "| Platform | Download |"
+            echo "|----------|----------|"
+            echo "| macOS (Apple Silicon) | \`.dmg\` (aarch64) |"
+            echo "| macOS (Intel) | \`.dmg\` (x64) |"
+            echo "| Windows | \`.exe\` installer |"
+            echo "| Windows (Portable) | \`.zip\` (no install required) |"
+            echo "| Linux | \`.deb\` package |"
+            echo ""
+            echo "---"
+            echo "*Bundled sidecar: CLIProxyAPIPlus $SIDECAR_VERSION*"
+          } > /tmp/release_body.md
+
+          echo "=== Release body ==="
+          cat /tmp/release_body.md
+          echo "===================="
+
+          # Update release with new body
+          gh release edit "${{ github.ref_name }}" --notes-file /tmp/release_body.md || true
+
+  notify:
+    name: Discord Notification
+    needs: [release, generate-changelog]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Discord notification (release)
+        if: ${{ needs.release.result == 'success' }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fetch the release body (which now contains the changelog)
+          RELEASE_BODY=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+            | jq -r '.body // "New version available"')
+
+          # Truncate if too long for Discord (max 4096 chars for embed description)
+          if [ ${#RELEASE_BODY} -gt 3800 ]; then
+            RELEASE_BODY="${RELEASE_BODY:0:3800}...\n\n[See full changelog](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }})"
+          fi
+
+          # Escape for JSON
+          RELEASE_BODY=$(echo "$RELEASE_BODY" | jq -Rs .)
+
+          # Send Discord notification with changelog
+          curl -H "Content-Type: application/json" \
+            -d "{\"embeds\": [{\"title\": \"🚀 CodexManager ${{ github.ref_name }} Released!\", \"description\": $RELEASE_BODY, \"color\": 5793266, \"url\": \"${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}\"}]}" \
+            $DISCORD_WEBHOOK
+
+      - name: Discord notification (failure)
+        if: ${{ needs.release.result == 'failure' }}
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"embeds\": [{\"title\": \"❌ CodexManager Release Failed\", \"description\": \"**Tag:** \`${{ github.ref_name }}\`\n\n[View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\", \"color\": 15158332}]}" \
+            $DISCORD_WEBHOOK
