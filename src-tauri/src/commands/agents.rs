@@ -653,9 +653,15 @@ fn configure_factory_droid_agent(
     let codex_manager_models: Vec<serde_json::Value> = models
         .iter()
         .map(|m| {
-            let (base_url, provider) = match m.owned_by.as_str() {
-                "anthropic" => (endpoint.to_string(), "anthropic"),
-                _ => (format!("{}/v1", endpoint), "openai"),
+            // Detect provider from owned_by OR model name prefix
+            // Claude models need provider "anthropic" and base_url without /v1
+            let is_anthropic = m.owned_by == "anthropic"
+                || m.id.starts_with("claude-")
+                || m.id.starts_with("claude_");
+            let (base_url, provider) = if is_anthropic {
+                (endpoint.to_string(), "anthropic")
+            } else {
+                (format!("{}/v1", endpoint), "openai")
             };
 
             serde_json::json!({
