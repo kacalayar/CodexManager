@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   release:
@@ -38,7 +39,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "pnpm"
 
       - name: Setup Rust
@@ -330,42 +331,3 @@ jobs:
 
           # Update release with new body
           gh release edit "${{ github.ref_name }}" --notes-file /tmp/release_body.md || true
-
-  notify:
-    name: Discord Notification
-    needs: [release, generate-changelog]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Discord notification (release)
-        if: ${{ needs.release.result == 'success' }}
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Fetch the release body (which now contains the changelog)
-          RELEASE_BODY=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
-            | jq -r '.body // "New version available"')
-
-          # Truncate if too long for Discord (max 4096 chars for embed description)
-          if [ ${#RELEASE_BODY} -gt 3800 ]; then
-            RELEASE_BODY="${RELEASE_BODY:0:3800}...\n\n[See full changelog](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }})"
-          fi
-
-          # Escape for JSON
-          RELEASE_BODY=$(echo "$RELEASE_BODY" | jq -Rs .)
-
-          # Send Discord notification with changelog
-          curl -H "Content-Type: application/json" \
-            -d "{\"embeds\": [{\"title\": \"🚀 CodexManager ${{ github.ref_name }} Released!\", \"description\": $RELEASE_BODY, \"color\": 5793266, \"url\": \"${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}\"}]}" \
-            $DISCORD_WEBHOOK
-
-      - name: Discord notification (failure)
-        if: ${{ needs.release.result == 'failure' }}
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
-          curl -H "Content-Type: application/json" \
-            -d "{\"embeds\": [{\"title\": \"❌ CodexManager Release Failed\", \"description\": \"**Tag:** \`${{ github.ref_name }}\`\n\n[View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\", \"color\": 15158332}]}" \
-            $DISCORD_WEBHOOK
