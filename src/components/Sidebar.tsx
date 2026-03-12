@@ -190,9 +190,7 @@ export const Sidebar: Component = () => {
           alt="CodexManager"
           class="h-8 w-8 flex-shrink-0 rounded-lg object-contain"
           src={
-            themeStore.resolvedTheme() === "dark"
-              ? "/proxypal-white.png"
-              : "/proxypal-black.png"
+            themeStore.resolvedTheme() === "dark" ? "/proxypal-white.png" : "/proxypal-black.png"
           }
         />
         <Show when={isExpanded()}>

@@ -258,10 +258,10 @@ export interface CopilotConfig {
 }
 
 export interface AvailableModel {
+  displayName: string; // UI display with provider suffix, e.g. "gpt-5-codex [Copilot]"
   id: string;
   ownedBy: string; // "google", "openai", "qwen", "anthropic", etc.
   source: string; // "vertex", "gemini-api", "copilot", "oauth", "api-key", etc.
-  displayName: string; // UI display with provider suffix, e.g. "gpt-5-codex [Copilot]"
 }
 
 export function isCopilotModel(

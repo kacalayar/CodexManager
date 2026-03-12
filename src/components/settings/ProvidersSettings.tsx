@@ -32,7 +32,7 @@ export function ProvidersSettings(props: ProvidersSettingsProps) {
     const grouped: Record<string, string[]> = {};
     for (const model of oauthModels) {
       let providerKey: string;
-      
+
       if (isCopilotModel(model)) {
         providerKey = "GitHub Copilot";
       } else if (model.ownedBy === "openai") {
@@ -44,7 +44,7 @@ export function ProvidersSettings(props: ProvidersSettingsProps) {
       } else {
         providerKey = model.ownedBy || "Unknown";
       }
-      
+
       if (!grouped[providerKey]) {
         grouped[providerKey] = [];
       }
