@@ -16,7 +16,7 @@ fn main() {
     // CARGO_PRIMARY_PACKAGE is set during check/build of the workspace root package.
     // For `cargo check`, Tauri doesn't bundle sidecars, so we can skip validation.
     // The release workflow downloads the binary before `cargo build`.
-    let is_check_only = env::var("PROXYPAL_SKIP_SIDECAR").is_ok();
+    let is_check_only = env::var("CODEXMANAGER_SKIP_SIDECAR").is_ok();
 
     let needs_download = if !binary_path.exists() {
         println!("cargo:warning=Sidecar binary not found: {}", binary_name);

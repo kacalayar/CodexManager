@@ -46,7 +46,7 @@ jobs:
         run: cargo check
         working-directory: src-tauri
         env:
-          CodexManager_SKIP_SIDECAR: "1"
+          CODEXMANAGER_SKIP_SIDECAR: "1"
 
   build:
     name: Build (${{ matrix.platform }})
@@ -119,21 +119,25 @@ jobs:
               ASSET_PATTERN="*darwin_arm64.tar.gz"
               BINARY="cli-proxy-api-aarch64-apple-darwin"
               ARCHIVE_TYPE="tar"
+              SRC_BINARY="cli-proxy-api-aarch64-apple-darwin"
               ;;
             x86_64-apple-darwin)
               ASSET_PATTERN="*darwin_amd64.tar.gz"
               BINARY="cli-proxy-api-x86_64-apple-darwin"
               ARCHIVE_TYPE="tar"
+              SRC_BINARY="cli-proxy-api-x86_64-apple-darwin"
               ;;
             x86_64-unknown-linux-gnu)
               ASSET_PATTERN="*linux_amd64.tar.gz"
               BINARY="cli-proxy-api-x86_64-unknown-linux-gnu"
               ARCHIVE_TYPE="tar"
+              SRC_BINARY="cli-proxy-api-x86_64-unknown-linux-gnu"
               ;;
             x86_64-pc-windows-msvc)
               ASSET_PATTERN="*windows_amd64.zip"
               BINARY="cli-proxy-api-x86_64-pc-windows-msvc.exe"
               ARCHIVE_TYPE="zip"
+              SRC_BINARY="cli-proxy-api-x86_64-pc-windows-msvc.exe"
               ;;
             *)
               echo "Unknown target: ${{ matrix.target }}"
@@ -155,7 +159,11 @@ jobs:
           fi
 
           # CLIProxyAPIPlus binary detection (prioritize Plus naming, fallback to original)
-          if [ -f "cli-proxy-api-plus" ]; then
+          if [ -f "$SRC_BINARY" ]; then
+            echo "Found platform-specific binary: $SRC_BINARY"
+            cp "$SRC_BINARY" "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+            chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY" 2>/dev/null || true
+          elif [ -f "cli-proxy-api-plus" ]; then
             cp cli-proxy-api-plus "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
             chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
           elif [ -f "cli-proxy-api-plus.exe" ]; then
@@ -178,7 +186,15 @@ jobs:
           else
             echo "Binary not found!"
             ls -la
-            exit 1
+            FOUND=$(find . -type f \( -name "cli-proxy-api-plus" -o -name "CLIProxyAPIPlus" -o -name "CLIProxyAPI" -o -name "cli-proxy-api" -o -name "$SRC_BINARY" \) ! -name "*.tar.gz" ! -name "*.zip" ! -name "*.tgz" | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "Found binary via recursive search: $FOUND"
+              cp "$FOUND" "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY"
+              chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/$BINARY" 2>/dev/null || true
+            else
+              echo "ERROR: Binary not found!"
+              exit 1
+            fi
           fi
 
           echo "Downloaded:"
