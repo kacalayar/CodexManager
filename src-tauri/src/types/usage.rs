@@ -14,6 +14,8 @@ pub struct RequestLog {
     pub tokens_in: Option<u32>,
     pub tokens_out: Option<u32>,
     pub tokens_cached: Option<u32>,
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

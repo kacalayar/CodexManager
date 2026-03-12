@@ -207,6 +207,10 @@ fn build_openai_compat_section(config: &AppConfig) -> String {
 
     // Custom providers
     for provider in &config.amp_openai_providers {
+        // Skip copilot entries that may have been persisted from the Go backend
+        if provider.name.starts_with("copilot") {
+            continue;
+        }
         if !provider.name.is_empty() && !provider.base_url.is_empty() && !provider.api_key.is_empty() {
             let mut entry = format!("  # Custom OpenAI-compatible provider: {}\n", provider.name);
             entry.push_str(&format!("  - name: \"{}\"\n", provider.name));
@@ -513,9 +517,9 @@ pub async fn start_proxy(
             .output();
         
         // Also kill any orphaned cliproxyapi processes by name
-        println!("[CodexManager] Killing any orphaned cliproxyapi processes");
+        println!("[CodexManager] Killing any orphaned proxy processes");
         let _ = std::process::Command::new("sh")
-            .args(["-c", "pkill -9 -f cliproxyapi 2>/dev/null"])
+            .args(["-c", "pkill -9 -f 'cli-proxy-api' 2>/dev/null; pkill -9 -f cliproxyapi 2>/dev/null"])
             .output();
     }
     #[cfg(windows)]
@@ -529,7 +533,7 @@ pub async fn start_proxy(
         
         // Also kill by process name on Windows (hidden window)
         let mut cmd2 = std::process::Command::new("cmd");
-        cmd2.args(["/C", "taskkill /F /IM cliproxyapi*.exe 2>nul"]);
+        cmd2.args(["/C", "taskkill /F /IM cli-proxy-api*.exe 2>nul & taskkill /F /IM cliproxyapi*.exe 2>nul"]);
         #[cfg(target_os = "windows")]
         cmd2.creation_flags(CREATE_NO_WINDOW);
         let _ = cmd2.output();
@@ -725,18 +729,18 @@ pub async fn stop_proxy(
         }
     }
 
-    // Also kill any orphaned cliproxyapi processes by name (belt and suspenders)
+    // Also kill any orphaned proxy processes by name (belt and suspenders)
     #[cfg(unix)]
     {
-        println!("[CodexManager] Cleaning up any orphaned cliproxyapi processes");
+        println!("[CodexManager] Cleaning up any orphaned proxy processes");
         let _ = std::process::Command::new("sh")
-            .args(["-c", "pkill -9 -f cliproxyapi 2>/dev/null"])
+            .args(["-c", "pkill -9 -f 'cli-proxy-api' 2>/dev/null; pkill -9 -f cliproxyapi 2>/dev/null"])
             .output();
     }
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "taskkill /F /IM cliproxyapi*.exe 2>nul"]);
+        cmd.args(["/C", "taskkill /F /IM cli-proxy-api*.exe 2>nul & taskkill /F /IM cliproxyapi*.exe 2>nul"]);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = cmd.output();

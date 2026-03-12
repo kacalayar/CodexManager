@@ -59,21 +59,31 @@ fn extract_timestamp_from_line(line: &str) -> Option<u64> {
 fn parse_gin_log_line(
     line: &str,
     request_counter: &AtomicU64,
-    model_cache: &std::sync::RwLock<std::collections::HashMap<String, String>>,
+    model_cache: &std::sync::RwLock<std::collections::HashMap<String, (String, Option<String>)>>,
 ) -> Option<RequestLog> {
     // Check for model info in DEBUG lines and cache it
     // Format: | f803bb77 | Use OAuth user@email.com for model claude-opus-4-5-thinking
+    // Also:   | f803bb77 | Use API key sk-xxx for model claude-opus-4-5-thinking
     if line.contains("for model ") {
         lazy_static::lazy_static! {
             static ref MODEL_REGEX: Regex = Regex::new(
-                r#"\|\s+([a-f0-9]{8})\s+\|.*for model\s+(\S+)"#
+                r#"\|\s+([a-f0-9]{8})\s+\|.*?(?:Use OAuth\s+(\S+)|Use API key\s+(\S+)).*?for model\s+(\S+)"#
             ).unwrap();
         }
         if let Some(caps) = MODEL_REGEX.captures(line) {
             let request_id = caps.get(1)?.as_str().to_string();
-            let model = caps.get(2)?.as_str().to_string();
+            let account = caps.get(2).map(|m| m.as_str().to_string())
+                .or_else(|| caps.get(3).map(|m| {
+                    let key = m.as_str();
+                    if key.len() > 12 {
+                        format!("{}...{}", &key[..6], &key[key.len()-4..])
+                    } else {
+                        key.to_string()
+                    }
+                }));
+            let model = caps.get(4)?.as_str().to_string();
             if let Ok(mut cache) = model_cache.write() {
-                cache.insert(request_id, model);
+                cache.insert(request_id, (model, account));
                 // Keep cache size reasonable
                 if cache.len() > 1000 {
                     let keys: Vec<String> = cache.keys().take(500).cloned().collect();
@@ -154,11 +164,21 @@ fn parse_gin_log_line(
             model_cache
                 .read()
                 .ok()
-                .and_then(|cache| cache.get(&request_id).cloned())
+                .and_then(|cache| cache.get(&request_id).map(|(m, _)| m.clone()))
                 .or_else(|| extract_model_from_path(&path))
                 .unwrap_or_else(|| "unknown".to_string())
         } else {
             extract_model_from_path(&path).unwrap_or_else(|| "unknown".to_string())
+        };
+
+        // Look up account from cache
+        let account = if request_id != "--------" {
+            model_cache
+                .read()
+                .ok()
+                .and_then(|cache| cache.get(&request_id).and_then(|(_, a)| a.clone()))
+        } else {
+            None
         };
 
         // Determine provider from model first (more accurate), fallback to path-based detection
@@ -185,6 +205,7 @@ fn parse_gin_log_line(
             tokens_in: None,
             tokens_out: None,
             tokens_cached: None,
+            account,
         });
     }
 
@@ -249,6 +270,7 @@ fn parse_gin_log_line(
         tokens_in: None,     // Not available from GIN logs
         tokens_out: None,    // Not available from GIN logs
         tokens_cached: None, // Not available from GIN logs
+        account: None,       // Not available from GIN format
     })
 }
 
@@ -260,8 +282,8 @@ pub(crate) fn start_log_watcher(
     request_counter: Arc<AtomicU64>,
 ) {
     std::thread::spawn(move || {
-        // Model cache to associate request IDs with model names from DEBUG lines
-        let model_cache: std::sync::RwLock<std::collections::HashMap<String, String>> =
+        // Model cache to associate request IDs with model names and account from DEBUG lines
+        let model_cache: std::sync::RwLock<std::collections::HashMap<String, (String, Option<String>)>> =
             std::sync::RwLock::new(std::collections::HashMap::new());
 
         // Wait for log file to exist

@@ -65,7 +65,21 @@ pub async fn start_copilot_instance(
         return Err(format!("Copilot instance '{}' is not enabled", instance.name));
     }
     
-    // First, check if copilot-api is already running on this port (maybe externally)
+    // Check if we already have a tracked process for this instance (prevents double-spawn)
+    {
+        let processes = state.copilot_processes.lock().unwrap();
+        if processes.contains_key(&instance_id) {
+            let statuses = state.copilot_statuses.lock().unwrap();
+            if let Some(status) = statuses.instances.get(&instance_id) {
+                if status.running {
+                    println!("[copilot:{}] Already has a tracked running process, skipping spawn", instance.name);
+                    return Ok(status.clone());
+                }
+            }
+        }
+    }
+
+    // Check if copilot-api is already running on this port (maybe externally)
     let client = crate::build_management_client();
     let health_url = format!("http://127.0.0.1:{}/v1/models", port);
     if let Ok(response) = client

@@ -241,7 +241,6 @@ fn sync_usage_from_proxy_blocking(port: u16) {
     }
 
     // Parse model stats and totals
-    let mut total_requests: u64 = 0;
     let mut model_stats: std::collections::HashMap<String, ModelStats> =
         std::collections::HashMap::new();
 
@@ -257,8 +256,6 @@ fn sync_usage_from_proxy_blocking(port: u16) {
                         .get("total_tokens")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
-
-                    total_requests += model_requests;
 
                     let stats = model_stats
                         .entry(model_name.clone())
@@ -297,7 +294,7 @@ fn sync_usage_from_proxy_blocking(port: u16) {
     // Merge time-series data
     for point in &tokens_by_day {
         if let Some(existing) = agg.tokens_by_day.iter_mut().find(|p| p.label == point.label) {
-            existing.value = point.value;
+            existing.value = existing.value.max(point.value);
         } else {
             agg.tokens_by_day.push(point.clone());
         }
@@ -310,7 +307,7 @@ fn sync_usage_from_proxy_blocking(port: u16) {
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value;
+            existing.value = existing.value.max(point.value);
         } else {
             agg.tokens_by_hour.push(point.clone());
         }
@@ -328,7 +325,7 @@ fn sync_usage_from_proxy_blocking(port: u16) {
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value;
+            existing.value = existing.value.max(point.value);
         } else {
             agg.requests_by_day.push(point.clone());
         }
@@ -342,7 +339,7 @@ fn sync_usage_from_proxy_blocking(port: u16) {
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value;
+            existing.value = existing.value.max(point.value);
         } else {
             agg.requests_by_hour.push(point.clone());
         }
@@ -361,22 +358,23 @@ fn sync_usage_from_proxy_blocking(port: u16) {
             .model_stats
             .entry(model_name)
             .or_insert_with(Default::default);
-        agg_stats.requests = stats.requests;
-        agg_stats.success_count = stats.success_count;
-        agg_stats.tokens = stats.tokens;
-        agg_stats.input_tokens = stats.input_tokens;
-        agg_stats.output_tokens = stats.output_tokens;
-        agg_stats.cached_tokens = stats.cached_tokens;
+        agg_stats.requests = agg_stats.requests.max(stats.requests);
+        agg_stats.success_count = agg_stats.success_count.max(stats.success_count);
+        agg_stats.tokens = agg_stats.tokens.max(stats.tokens);
+        agg_stats.input_tokens = agg_stats.input_tokens.max(stats.input_tokens);
+        agg_stats.output_tokens = agg_stats.output_tokens.max(stats.output_tokens);
+        agg_stats.cached_tokens = agg_stats.cached_tokens.max(stats.cached_tokens);
     }
 
     // Update totals
-    if total_requests > agg.total_requests {
-        agg.total_requests = total_requests;
-    }
-    let synced_success: u64 = agg.model_stats.values().map(|s| s.success_count).sum();
-    if synced_success > agg.total_success_count {
-        agg.total_success_count = synced_success;
-    }
+    // Recompute total_requests from aggregate's requests_by_day (source of truth,
+    // already merged with both log_watcher increments and proxy data).
+    let computed_total: u64 = agg.requests_by_day.iter().map(|p| p.value).sum();
+    agg.total_requests = agg.total_requests.max(computed_total);
+
+    // Recompute success count from model stats
+    let computed_success: u64 = agg.model_stats.values().map(|s| s.success_count).sum();
+    agg.total_success_count = agg.total_success_count.max(computed_success);
 
     // Compute total tokens from per-model stats and update aggregate
     let total_input: u64 = agg.model_stats.values().map(|s| s.input_tokens).sum();
@@ -896,21 +894,21 @@ pub async fn sync_usage_from_proxy(state: State<'_, AppState>) -> Result<Request
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value; // Update with proxy value
+            existing.value = existing.value.max(point.value);
         } else {
             agg.tokens_by_day.push(point.clone());
         }
     }
     agg.tokens_by_day.sort_by(|a, b| a.label.cmp(&b.label));
 
-    // Merge requests_by_day into aggregate (proxy is source of truth for requests)
+    // Merge requests_by_day into aggregate
     for point in &requests_by_day {
         if let Some(existing) = agg
             .requests_by_day
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value; // Update with proxy value
+            existing.value = existing.value.max(point.value);
         } else {
             agg.requests_by_day.push(point.clone());
         }
@@ -918,14 +916,14 @@ pub async fn sync_usage_from_proxy(state: State<'_, AppState>) -> Result<Request
     agg.requests_by_day
         .sort_by(|a, b| a.label.cmp(&b.label));
 
-    // Merge requests_by_hour into aggregate (for Activity Patterns heatmap)
+    // Merge requests_by_hour into aggregate
     for point in &requests_by_hour {
         if let Some(existing) = agg
             .requests_by_hour
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value; // Update with proxy value
+            existing.value = existing.value.max(point.value);
         } else {
             agg.requests_by_hour.push(point.clone());
         }
@@ -946,7 +944,7 @@ pub async fn sync_usage_from_proxy(state: State<'_, AppState>) -> Result<Request
             .iter_mut()
             .find(|p| p.label == point.label)
         {
-            existing.value = point.value; // Update with proxy value
+            existing.value = existing.value.max(point.value);
         } else {
             agg.tokens_by_hour.push(point.clone());
         }
@@ -1012,22 +1010,24 @@ pub async fn sync_usage_from_proxy(state: State<'_, AppState>) -> Result<Request
                         .model_stats
                         .entry(model_name.clone())
                         .or_insert_with(Default::default);
-                    stats.requests = total_requests;
-                    stats.success_count = total_requests; // Assume all synced requests succeeded
-                    stats.tokens = total_tokens;
-                    stats.input_tokens = input_tokens;
-                    stats.output_tokens = output_tokens;
-                    stats.cached_tokens = cached_tokens;
+                    stats.requests = stats.requests.max(total_requests);
+                    stats.success_count = stats.success_count.max(total_requests);
+                    stats.tokens = stats.tokens.max(total_tokens);
+                    stats.input_tokens = stats.input_tokens.max(input_tokens);
+                    stats.output_tokens = stats.output_tokens.max(output_tokens);
+                    stats.cached_tokens = stats.cached_tokens.max(cached_tokens);
                 }
             }
         }
     }
 
-    // Update total_success_count from synced model stats (proxy only tracks successful requests)
-    let synced_success: u64 = agg.model_stats.values().map(|s| s.success_count).sum();
-    if synced_success > agg.total_success_count {
-        agg.total_success_count = synced_success;
-    }
+    // Recompute total_requests from requests_by_day (merged source of truth)
+    let computed_total: u64 = agg.requests_by_day.iter().map(|p| p.value).sum();
+    agg.total_requests = agg.total_requests.max(computed_total);
+
+    // Recompute success count from model stats
+    let computed_success: u64 = agg.model_stats.values().map(|s| s.success_count).sum();
+    agg.total_success_count = agg.total_success_count.max(computed_success);
     // Update total_tokens_cached in aggregate (use max to prevent regression on proxy restart)
     agg.total_tokens_cached = agg.total_tokens_cached.max(total_cached);
 

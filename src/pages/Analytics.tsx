@@ -10,7 +10,7 @@ import {
   type HeatmapData,
 } from "../components/charts";
 import { useI18n } from "../i18n";
-import { exportUsageStats, getUsageStats, importUsageStats, type UsageStats } from "../lib/tauri";
+import { exportUsageStats, getUsageStats, importUsageStats, onRequestLog, type UsageStats } from "../lib/tauri";
 import { toastStore } from "../stores/toast";
 
 // Register Chart.js components
@@ -378,6 +378,29 @@ export function Analytics() {
   // Fetch on mount
   onMount(() => {
     fetchStats();
+  });
+
+  // Listen for new requests to refresh stats in realtime
+  let unlistenRef: (() => void) | null = null;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onMount(async () => {
+    try {
+      const unlisten = await onRequestLog(() => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          fetchStats();
+        }, 1500);
+      });
+      unlistenRef = unlisten;
+    } catch (e) {
+      console.error("Failed to listen for request-log:", e);
+    }
+  });
+
+  onCleanup(() => {
+    if (unlistenRef) unlistenRef();
+    if (debounceTimer) clearTimeout(debounceTimer);
   });
 
   // Filter data by date preset and fill in missing days/hours with zeros

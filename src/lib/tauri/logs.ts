@@ -13,6 +13,8 @@ export interface RequestLog {
   timestamp: number;
   tokensIn?: number;
   tokensOut?: number;
+  tokensCached?: number;
+  account?: string;
 }
 
 export async function onRequestLog(callback: (log: RequestLog) => void): Promise<UnlistenFn> {
@@ -37,6 +39,11 @@ export async function getLogs(lines?: number): Promise<LogEntry[]> {
 
 export async function clearLogs(): Promise<void> {
   return invoke("clear_logs");
+}
+
+// Fetch parsed request logs directly from the Go backend's logs API
+export async function getProxyRequestLogs(lines?: number): Promise<RequestLog[]> {
+  return invoke("get_proxy_request_logs", { lines });
 }
 
 // Request Error Logs - view error-specific logs

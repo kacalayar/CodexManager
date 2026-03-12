@@ -1,10 +1,11 @@
 //! Log viewer commands and helpers.
 
 use crate::state::AppState;
-use crate::types::LogEntry;
+use crate::types::{LogEntry, RequestLog};
 use crate::{build_management_client, get_management_key, get_management_url};
 use serde::Deserialize;
 use tauri::State;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // API response structure for logs
 #[derive(Debug, Clone, Deserialize)]
@@ -18,6 +19,182 @@ struct LogsApiResponse {
     line_count: Option<u32>,
     #[serde(default)]
     lines: Vec<String>,
+}
+
+// Parse request info from a GIN/new-format log line (simplified version of log_watcher logic)
+fn parse_request_from_log_line(line: &str, counter: &AtomicU64) -> Option<RequestLog> {
+    // Skip empty/internal lines
+    if line.is_empty()
+        || line.contains("/v0/management/")
+        || line.contains("/v1/models")
+        || line.contains("?uploadThread")
+        || line.contains("?getCreditsByRequestId")
+        || line.contains("?threadDisplayCostInfo")
+        || line.contains("/api/internal")
+        || line.contains("/api/telemetry")
+        || line.contains("/api/otel")
+    {
+        return None;
+    }
+
+    let is_trackable = line.contains("/chat/completions")
+        || line.contains("/v1/messages")
+        || line.contains("/completions")
+        || line.contains("/v1beta")
+        || line.contains(":generateContent")
+        || line.contains(":streamGenerateContent");
+
+    if !is_trackable {
+        return None;
+    }
+
+    lazy_static::lazy_static! {
+        static ref NEW_FMT: regex::Regex = regex::Regex::new(
+            r#"\|\s+([a-f0-9]{8}|-{8})\s+\|\s+(\d+)\s+\|\s+([^\s]+)\s+\|\s+[^\s]+\s+\|\s+(\w+)\s+\"([^\"]+)\""#
+        ).unwrap();
+        static ref GIN_FMT: regex::Regex = regex::Regex::new(
+            r#"\[GIN\]\s+(\d{4}/\d{2}/\d{2})\s+-\s+(\d{2}:\d{2}:\d{2})\s+\|\s+(\d+)\s+\|\s+([^\s]+)\s+\|\s+[^\s]+\s+\|\s+(\w+)\s+\"([^\"]+)\"(?:\s+\|\s+model=(\S+))?"#
+        ).unwrap();
+        static ref TS_RE: regex::Regex = regex::Regex::new(
+            r#"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})"#
+        ).unwrap();
+    }
+
+    // Extract timestamp helper
+    let extract_ts = |l: &str| -> u64 {
+        if let Some(caps) = TS_RE.captures(l) {
+            let ds = format!("{} {}", &caps[1], &caps[2]);
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&ds, "%Y-%m-%d %H:%M:%S") {
+                return dt
+                    .and_local_timezone(chrono::Local)
+                    .earliest()
+                    .unwrap_or_else(|| chrono::Local::now())
+                    .timestamp_millis() as u64;
+            }
+        }
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+
+    let parse_dur = |s: &str| -> u64 {
+        if s.ends_with("ms") {
+            s.trim_end_matches("ms").parse().unwrap_or(0)
+        } else if s.ends_with('s') {
+            let v: f64 = s.trim_end_matches('s').parse().unwrap_or(0.0);
+            (v * 1000.0) as u64
+        } else {
+            0
+        }
+    };
+
+    // Try new format
+    if let Some(caps) = NEW_FMT.captures(line) {
+        let status: u16 = caps.get(2)?.as_str().parse().ok()?;
+        let duration_ms = parse_dur(caps.get(3)?.as_str());
+        let method = caps.get(4)?.as_str().to_string();
+        let path = caps.get(5)?.as_str().to_string();
+        let timestamp = extract_ts(line);
+        let model = crate::utils::extract_model_from_path(&path).unwrap_or_else(|| "unknown".to_string());
+        let mp = crate::utils::detect_provider_from_model(&model);
+        let provider = if mp != "unknown" { mp } else {
+            crate::utils::detect_provider_from_path(&path).unwrap_or_else(|| "unknown".to_string())
+        };
+        let c = counter.fetch_add(1, Ordering::SeqCst);
+        return Some(RequestLog {
+            id: format!("srv_{}_{}", timestamp, c),
+            timestamp,
+            provider,
+            model,
+            method,
+            path,
+            status,
+            duration_ms,
+            tokens_in: None,
+            tokens_out: None,
+            tokens_cached: None,
+            account: None,
+        });
+    }
+
+    // Try GIN format
+    if let Some(caps) = GIN_FMT.captures(line) {
+        let date_str = caps.get(1)?.as_str();
+        let time_str = caps.get(2)?.as_str();
+        let status: u16 = caps.get(3)?.as_str().parse().ok()?;
+        let duration_ms = parse_dur(caps.get(4)?.as_str());
+        let method = caps.get(5)?.as_str().to_string();
+        let path = caps.get(6)?.as_str().to_string();
+        let dt_str = format!("{} {}", date_str.replace('/', "-"), time_str);
+        let timestamp = chrono::NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|dt| dt.and_local_timezone(chrono::Local).earliest().unwrap_or_else(|| chrono::Local::now()).timestamp_millis() as u64)
+            .unwrap_or_else(|| extract_ts(line));
+        let model = caps.get(7).map(|m| m.as_str().to_string())
+            .or_else(|| crate::utils::extract_model_from_path(&path))
+            .unwrap_or_else(|| "unknown".to_string());
+        let mp = crate::utils::detect_provider_from_model(&model);
+        let provider = if mp != "unknown" { mp } else {
+            crate::utils::detect_provider_from_path(&path).unwrap_or_else(|| "unknown".to_string())
+        };
+        let c = counter.fetch_add(1, Ordering::SeqCst);
+        return Some(RequestLog {
+            id: format!("srv_{}_{}", timestamp, c),
+            timestamp,
+            provider,
+            model,
+            method,
+            path,
+            status,
+            duration_ms,
+            tokens_in: None,
+            tokens_out: None,
+            tokens_cached: None,
+            account: None,
+        });
+    }
+
+    None
+}
+
+// Fetch request logs from the Go backend's logs API and parse into RequestLog entries
+#[tauri::command]
+pub async fn get_proxy_request_logs(
+    state: State<'_, AppState>,
+    lines: Option<u32>,
+) -> Result<Vec<RequestLog>, String> {
+    let port = state.config.lock().unwrap().port;
+    let lines_param = lines.unwrap_or(2000);
+    let url = format!("{}?lines={}", get_management_url(port, "logs"), lines_param);
+
+    let client = build_management_client();
+    let response = client
+        .get(&url)
+        .header("X-Management-Key", &get_management_key())
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get logs: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed to get logs: {} - {}", status, text));
+    }
+
+    let api_response: LogsApiResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse logs response: {}", e))?;
+
+    let counter = AtomicU64::new(0);
+    let requests: Vec<RequestLog> = api_response
+        .lines
+        .iter()
+        .filter_map(|line| parse_request_from_log_line(line, &counter))
+        .collect();
+
+    Ok(requests)
 }
 
 // Get logs from the proxy server
@@ -175,4 +352,52 @@ pub async fn clear_logs(state: State<'_, AppState>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// Get list of error log files from the logs directory
+#[tauri::command]
+pub fn get_request_error_logs() -> Result<Vec<String>, String> {
+    let logs_dir = crate::config::get_codex_manager_config_dir().join("logs");
+
+    if !logs_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut files: Vec<String> = std::fs::read_dir(&logs_dir)
+        .map_err(|e| format!("Failed to read logs directory: {}", e))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Include error logs and any non-main log files
+            if name.contains("error") || (name.ends_with(".log") && name != "main.log") {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Sort newest first
+    files.sort_by(|a, b| b.cmp(a));
+    Ok(files)
+}
+
+// Get the content of a specific error log file
+#[tauri::command]
+pub fn get_request_error_log_content(filename: String) -> Result<String, String> {
+    // Sanitize filename to prevent path traversal
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid filename".to_string());
+    }
+
+    let log_path = crate::config::get_codex_manager_config_dir()
+        .join("logs")
+        .join(&filename);
+
+    if !log_path.exists() {
+        return Err(format!("Log file not found: {}", filename));
+    }
+
+    std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log file: {}", e))
 }

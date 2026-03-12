@@ -223,16 +223,16 @@ pub fn run() {
     // Clean up any orphaned clipproxyapi processes from previous crashes
     #[cfg(unix)]
     {
-        println!("[CodexManager] Cleaning up orphaned clipproxyapi processes on startup");
+        println!("[CodexManager] Cleaning up orphaned proxy processes on startup");
         let _ = std::process::Command::new("sh")
-            .args(["-c", "pkill -9 -f clipproxyapi 2>/dev/null"])
+            .args(["-c", "pkill -9 -f 'cli-proxy-api' 2>/dev/null; pkill -9 -f cliproxyapi 2>/dev/null"])
             .spawn()
             .and_then(|mut child| child.wait());
     }
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "taskkill /F /IM clipproxyapi*.exe 2>nul"]);
+        cmd.args(["/C", "taskkill /F /IM cli-proxy-api*.exe 2>nul & taskkill /F /IM cliproxyapi*.exe 2>nul"]);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = cmd.spawn().and_then(|mut child| child.wait());
@@ -439,6 +439,9 @@ pub fn run() {
             // Log Viewer
             commands::logs::get_logs,
             commands::logs::clear_logs,
+            commands::logs::get_request_error_logs,
+            commands::logs::get_request_error_log_content,
+            commands::logs::get_proxy_request_logs,
             // Management API Settings
             commands::settings::get_max_retry_interval,
             commands::settings::set_max_retry_interval,
@@ -520,6 +523,28 @@ pub fn run() {
                                 }
                             }
                         }
+
+                    // Force-kill orphaned processes by name (child.kill() may not kill grandchildren on Windows)
+                    #[cfg(windows)]
+                    {
+                        let mut cmd1 = std::process::Command::new("cmd");
+                        cmd1.args(["/C", "taskkill /F /IM cli-proxy-api*.exe 2>nul & taskkill /F /IM cliproxyapi*.exe 2>nul"]);
+                        cmd1.creation_flags(CREATE_NO_WINDOW);
+                        let _ = cmd1.spawn().and_then(|mut c| c.wait());
+
+                        let mut cmd2 = std::process::Command::new("cmd");
+                        cmd2.args(["/C", "taskkill /F /IM bun.exe 2>nul"]);
+                        cmd2.creation_flags(CREATE_NO_WINDOW);
+                        let _ = cmd2.spawn().and_then(|mut c| c.wait());
+                    }
+                    #[cfg(unix)]
+                    {
+                        let _ = std::process::Command::new("sh")
+                            .args(["-c", "pkill -9 -f 'cli-proxy-api' 2>/dev/null; pkill -9 -f cliproxyapi 2>/dev/null; pkill -9 -f 'bun.*copilot-api' 2>/dev/null"])
+                            .spawn()
+                            .and_then(|mut c| c.wait());
+                    }
+
                     }
 
                     // Cleaning up SSH connections

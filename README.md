@@ -120,4 +120,4 @@ MIT
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=kacalayar/codexmanager&type=Date)](https://star-history.com/#kacalayar/codexmanager&Date)
+[![Star History Chart](https://api.star-history.com/image?repos=kacalayar/codexmanager&type=date&legend=top-left)](https://www.star-history.com/?repos=kacalayar%2Fcodexmanager&type=date&legend=top-left)

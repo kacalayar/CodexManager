@@ -1134,7 +1134,7 @@ export function AdvancedSettings(props: AdvancedSettingsProps) {
           <h3 class="font-bold text-gray-900 dark:text-gray-100">CodexManager</h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">Version {props.appVersion()}</p>
           <p class="mt-2 text-xs text-gray-400 dark:text-gray-500">
-            Built with love by OpenCodeKit
+            Built with love by SR
           </p>
         </div>
       </div>

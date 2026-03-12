@@ -291,7 +291,16 @@ pub async fn get_openai_compatible_providers(state: State<'_, AppState>) -> Resu
     }
     
     let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    convert_api_key_response(json, "openai-compatibility")
+    let providers: Vec<OpenAICompatibleProvider> = convert_api_key_response(json, "openai-compatibility")?;
+
+    // Filter out copilot-generated entries to avoid duplicates.
+    // Copilot entries are injected into the YAML config by build_openai_compat_section
+    // and should not be shown as user-managed providers.
+    let filtered = providers.into_iter()
+        .filter(|p| !p.name.starts_with("copilot"))
+        .collect();
+
+    Ok(filtered)
 }
 
 #[tauri::command]
@@ -299,8 +308,35 @@ pub async fn set_openai_compatible_providers(state: State<'_, AppState>, provide
     let port = state.config.lock().unwrap().port;
     let url = crate::get_management_url(port, "openai-compatibility");
     
+    // Re-read current providers from Go backend to preserve copilot entries
+    // that were filtered out in get_openai_compatible_providers.
+    let existing_copilot: Vec<OpenAICompatibleProvider> = {
+        let client = crate::build_management_client();
+        let resp = client
+            .get(&url)
+            .header("X-Management-Key", &crate::get_management_key())
+            .send()
+            .await
+            .ok();
+        if let Some(r) = resp {
+            if r.status().is_success() {
+                let json: serde_json::Value = r.json().await.unwrap_or_default();
+                let all: Vec<OpenAICompatibleProvider> = convert_api_key_response(json, "openai-compatibility").unwrap_or_default();
+                all.into_iter().filter(|p| p.name.starts_with("copilot")).collect()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        }
+    };
+
+    // Merge: user providers + existing copilot entries
+    let mut merged = providers.clone();
+    merged.extend(existing_copilot);
+
     let client = crate::build_management_client();
-    let body = convert_to_management_format(&providers)?;
+    let body = convert_to_management_format(&merged)?;
     
     let response = client
         .put(&url)

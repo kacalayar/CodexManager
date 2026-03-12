@@ -9,6 +9,7 @@ import {
   getRequestErrorLogs,
   type LogEntry,
 } from "../lib/tauri";
+import { onRequestLog, type RequestLog, getProxyRequestLogs } from "../lib/tauri";
 import { appStore } from "../stores/app";
 import { toastStore } from "../stores/toast";
 
@@ -24,13 +25,38 @@ const levelColors: Record<string, string> = {
 // Performance: limit displayed logs, load more on demand
 const INITIAL_LOG_FETCH = 200;
 const DISPLAY_CHUNK_SIZE = 100;
+const MAX_REALTIME_REQUESTS = 500;
 
-type LogTab = "server" | "errors";
+type LogTab = "requests" | "server" | "errors";
+type StatusFilter = "all" | "success" | "error";
+
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatDate(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function statusColor(status: number): string {
+  if (status >= 200 && status < 300) return "text-green-500 bg-green-500/10";
+  if (status >= 400 && status < 500) return "text-yellow-500 bg-yellow-500/10";
+  if (status >= 500) return "text-red-500 bg-red-500/10";
+  return "text-gray-500 bg-gray-500/10";
+}
 
 export function LogViewerPage() {
   const { t } = useI18n();
   const { proxyStatus } = appStore;
-  const [activeTab, setActiveTab] = createSignal<LogTab>("server");
+  const [activeTab, setActiveTab] = createSignal<LogTab>("requests");
   const [logs, setLogs] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true); // Start true for immediate skeleton
   const [initialLoad, setInitialLoad] = createSignal(true);
@@ -39,6 +65,15 @@ export function LogViewerPage() {
   const [search, setSearch] = createSignal("");
   const [showClearConfirm, setShowClearConfirm] = createSignal(false);
   const [displayLimit, setDisplayLimit] = createSignal(DISPLAY_CHUNK_SIZE);
+
+  // Realtime request log state
+  const [requestLogs, setRequestLogs] = createSignal<RequestLog[]>([]);
+  const [requestSearch, setRequestSearch] = createSignal("");
+  const [statusFilter, setStatusFilter] = createSignal<StatusFilter>("all");
+  const [requestLoading, setRequestLoading] = createSignal(true);
+  const [autoScroll, setAutoScroll] = createSignal(true);
+  let requestTableRef: HTMLDivElement | undefined;
+  let unlistenRequestLog: (() => void) | null = null;
 
   // Error logs state
   const [errorLogFiles, setErrorLogFiles] = createSignal<string[]>([]);
@@ -50,15 +85,17 @@ export function LogViewerPage() {
   let logContainerRef: HTMLDivElement | undefined;
   let prevRunning = false;
 
-  // Load logs once on mount when proxy is running
+  // Load logs and request history on mount
   onMount(() => {
     prevRunning = proxyStatus().running;
     if (prevRunning) {
       loadLogs();
+      loadRequestHistory();
+      startRequestListener();
     } else {
-      // Not running, clear loading state
       setLoading(false);
       setInitialLoad(false);
+      setRequestLoading(false);
     }
   });
 
@@ -66,13 +103,15 @@ export function LogViewerPage() {
   createEffect(() => {
     const running = proxyStatus().running;
 
-    // Only load logs when proxy STARTS (transitions from stopped to running)
     if (running && !prevRunning) {
       loadLogs();
+      loadRequestHistory();
+      startRequestListener();
     } else if (!running && prevRunning) {
       setLogs([]);
       setLoading(false);
       setInitialLoad(false);
+      stopRequestListener();
     }
     prevRunning = running;
   });
@@ -94,7 +133,76 @@ export function LogViewerPage() {
     if (refreshInterval) {
       clearInterval(refreshInterval);
     }
+    stopRequestListener();
   });
+
+  const loadRequestHistory = async () => {
+    setRequestLoading(true);
+    try {
+      // Fetch parsed request logs directly from the Go backend's logs API
+      const serverLogs = await getProxyRequestLogs(2000);
+      setRequestLogs(serverLogs.slice(-MAX_REALTIME_REQUESTS));
+    } catch (error) {
+      console.error("Failed to load request history:", error);
+    } finally {
+      setRequestLoading(false);
+    }
+  };
+
+  const startRequestListener = async () => {
+    stopRequestListener();
+    try {
+      const unlisten = await onRequestLog((log) => {
+        setRequestLogs((prev) => {
+          const updated = [...prev, log];
+          if (updated.length > MAX_REALTIME_REQUESTS) {
+            return updated.slice(-MAX_REALTIME_REQUESTS);
+          }
+          return updated;
+        });
+        if (autoScroll() && requestTableRef) {
+          requestAnimationFrame(() => {
+            requestTableRef!.scrollTop = 0;
+          });
+        }
+      });
+      unlistenRequestLog = unlisten;
+    } catch (error) {
+      console.error("Failed to start request listener:", error);
+    }
+  };
+
+  const stopRequestListener = () => {
+    if (unlistenRequestLog) {
+      unlistenRequestLog();
+      unlistenRequestLog = null;
+    }
+  };
+
+  const filteredRequestLogs = createMemo(() => {
+    let result = requestLogs();
+    const sf = statusFilter();
+    if (sf === "success") {
+      result = result.filter((r) => r.status >= 200 && r.status < 400);
+    } else if (sf === "error") {
+      result = result.filter((r) => r.status >= 400);
+    }
+    const term = requestSearch().toLowerCase();
+    if (term) {
+      result = result.filter(
+        (r) =>
+          r.model.toLowerCase().includes(term) ||
+          r.path.toLowerCase().includes(term) ||
+          r.provider.toLowerCase().includes(term) ||
+          (r.account && r.account.toLowerCase().includes(term)),
+      );
+    }
+    return [...result].reverse();
+  });
+
+  const clearRequestLogs = () => {
+    setRequestLogs([]);
+  };
 
   const loadLogs = async () => {
     // Don't block on subsequent loads (allow concurrent refresh indicator)
@@ -272,6 +380,16 @@ export function LogViewerPage() {
             <div class="ml-2 flex items-center gap-1 rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
               <button
                 class={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  activeTab() === "requests"
+                    ? "bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100"
+                    : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                }`}
+                onClick={() => setActiveTab("requests")}
+              >
+                {t("logs.tabs.requests")}
+              </button>
+              <button
+                class={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                   activeTab() === "server"
                     ? "bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100"
                     : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
@@ -315,68 +433,53 @@ export function LogViewerPage() {
           </div>
 
           <div class="flex items-center gap-2">
-            {/* Auto-refresh toggle - play/pause icon */}
-            <button
-              class={`rounded-lg p-2 transition-colors ${
-                autoRefresh()
-                  ? "bg-brand-500/20 text-brand-500"
-                  : "text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              }`}
-              onClick={() => setAutoRefresh(!autoRefresh())}
-              title={
-                autoRefresh()
-                  ? t("logs.actions.stopAutoRefresh")
-                  : t("logs.actions.startAutoRefresh")
-              }
-            >
-              <Show
-                fallback={
-                  /* Play icon when OFF */
-                  <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                }
-                when={autoRefresh()}
-              >
-                {/* Pause icon when ON */}
-                <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-                </svg>
-              </Show>
-            </button>
-
-            {/* Manual refresh button - circular arrow with spin when loading */}
-            <button
-              class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              disabled={loading()}
-              onClick={loadLogs}
-              title={t("logs.actions.refreshNow")}
-            >
-              <svg
-                class={`h-5 w-5 ${loading() ? "animate-spin" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                />
-              </svg>
-            </button>
-
-            {/* Download button */}
-            <Show when={logs().length > 0}>
+            {/* Server/Error tab controls - only show when not on requests tab */}
+            <Show when={activeTab() !== "requests"}>
+              {/* Auto-refresh toggle - play/pause icon */}
               <button
-                class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                onClick={handleDownload}
-                title={t("logs.actions.downloadLogs")}
+                class={`rounded-lg p-2 transition-colors ${
+                  autoRefresh()
+                    ? "bg-brand-500/20 text-brand-500"
+                    : "text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                }`}
+                onClick={() => setAutoRefresh(!autoRefresh())}
+                title={
+                  autoRefresh()
+                    ? t("logs.actions.stopAutoRefresh")
+                    : t("logs.actions.startAutoRefresh")
+                }
               >
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <Show
+                  fallback={
+                    /* Play icon when OFF */
+                    <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  }
+                  when={autoRefresh()}
+                >
+                  {/* Pause icon when ON */}
+                  <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                  </svg>
+                </Show>
+              </button>
+
+              {/* Manual refresh button */}
+              <button
+                class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                disabled={loading()}
+                onClick={loadLogs}
+                title={t("logs.actions.refreshNow")}
+              >
+                <svg
+                  class={`h-5 w-5 ${loading() ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
                   <path
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                     stroke-linecap="round"
                     stroke-linejoin="round"
                     stroke-width="2"
@@ -384,15 +487,33 @@ export function LogViewerPage() {
                 </svg>
               </button>
 
-              {/* Clear button */}
-              <Button
-                class="text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                onClick={() => setShowClearConfirm(true)}
-                size="sm"
-                variant="ghost"
-              >
-                {t("logs.actions.clear")}
-              </Button>
+              {/* Download button */}
+              <Show when={logs().length > 0}>
+                <button
+                  class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  onClick={handleDownload}
+                  title={t("logs.actions.downloadLogs")}
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                    />
+                  </svg>
+                </button>
+
+                {/* Clear button */}
+                <Button
+                  class="text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                  onClick={() => setShowClearConfirm(true)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  {t("logs.actions.clear")}
+                </Button>
+              </Show>
             </Show>
           </div>
         </div>
@@ -421,6 +542,172 @@ export function LogViewerPage() {
         </Show>
 
         <Show when={proxyStatus().running}>
+          {/* Realtime Requests Tab */}
+          <Show when={activeTab() === "requests"}>
+            {/* Filters */}
+            <div class="flex flex-wrap items-center gap-3 border-b border-gray-200 px-4 py-2 dark:border-gray-800 sm:px-6">
+              <div class="flex items-center gap-1">
+                <For
+                  each={[
+                    { id: "all" as StatusFilter, label: t("logs.requests.allStatuses") },
+                    { id: "success" as StatusFilter, label: t("logs.requests.successOnly") },
+                    { id: "error" as StatusFilter, label: t("logs.requests.errorOnly") },
+                  ]}
+                >
+                  {(item) => (
+                    <button
+                      class={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                        statusFilter() === item.id
+                          ? "bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100"
+                          : "text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
+                      }`}
+                      onClick={() => setStatusFilter(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+
+              <div class="max-w-xs flex-1">
+                <input
+                  class="w-full rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-sm focus:border-transparent focus:ring-2 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
+                  onInput={(e) => setRequestSearch(e.currentTarget.value)}
+                  placeholder={t("logs.searchPlaceholder")}
+                  type="text"
+                  value={requestSearch()}
+                />
+              </div>
+
+              <div class="ml-auto flex items-center gap-2">
+                <span class="text-xs tabular-nums text-gray-400">
+                  {t("logs.requests.totalRequests", { count: filteredRequestLogs().length })}
+                </span>
+                <button
+                  class={`rounded-lg p-1.5 text-xs transition-colors ${
+                    autoScroll()
+                      ? "bg-brand-500/20 text-brand-500"
+                      : "text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  }`}
+                  onClick={() => setAutoScroll(!autoScroll())}
+                  title="Auto-scroll"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path d="M19 14l-7 7m0 0l-7-7m7 7V3" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
+                  </svg>
+                </button>
+                <Show when={requestLogs().length > 0}>
+                  <button
+                    class="rounded-lg px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                    onClick={clearRequestLogs}
+                  >
+                    {t("logs.actions.clear")}
+                  </button>
+                </Show>
+              </div>
+            </div>
+
+            {/* Requests table */}
+            <div class="flex-1 overflow-y-auto" ref={requestTableRef}>
+              <Show when={requestLoading()}>
+                <div class="space-y-1 p-4">
+                  <For each={Array(8).fill(0)}>
+                    {() => (
+                      <div class="flex animate-pulse items-center gap-3 rounded px-2 py-2">
+                        <div class="h-4 w-16 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div class="h-4 w-32 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div class="h-4 w-12 rounded bg-gray-200 dark:bg-gray-700" />
+                        <div class="h-4 flex-1 rounded bg-gray-200 dark:bg-gray-700" />
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+
+              <Show when={!requestLoading()}>
+                <Show
+                  fallback={
+                    <div class="flex h-full items-center justify-center">
+                      <EmptyState
+                        description={
+                          requestSearch() || statusFilter() !== "all"
+                            ? t("logs.requests.noResults")
+                            : t("logs.requests.emptyDescription")
+                        }
+                        icon={
+                          <svg class="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" />
+                          </svg>
+                        }
+                        title={t("logs.requests.empty")}
+                      />
+                    </div>
+                  }
+                  when={filteredRequestLogs().length > 0}
+                >
+                  <table class="w-full text-xs">
+                    <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-800/90">
+                      <tr class="text-left text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        <th class="px-3 py-2">{t("logs.requests.time")}</th>
+                        <th class="px-3 py-2">{t("logs.requests.status")}</th>
+                        <th class="px-3 py-2">{t("logs.requests.method")}</th>
+                        <th class="px-3 py-2">{t("logs.requests.model")}</th>
+                        <th class="px-3 py-2">{t("logs.requests.account")}</th>
+                        <th class="px-3 py-2">{t("logs.requests.path")}</th>
+                        <th class="px-3 py-2 text-right">{t("logs.requests.duration")}</th>
+                        <th class="px-3 py-2 text-right">{t("logs.requests.tokensIn")}</th>
+                        <th class="px-3 py-2 text-right">{t("logs.requests.tokensOut")}</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                      <For each={filteredRequestLogs()}>
+                        {(req) => (
+                          <tr class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                            <td class="whitespace-nowrap px-3 py-1.5 tabular-nums text-gray-500 dark:text-gray-400" title={new Date(req.timestamp).toLocaleString()}>
+                              <span class="text-gray-400 dark:text-gray-500">{formatDate(req.timestamp)}</span>{" "}
+                              {formatTimestamp(req.timestamp)}
+                            </td>
+                            <td class="px-3 py-1.5">
+                              <span class={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${statusColor(req.status)}`}>
+                                {req.status}
+                              </span>
+                            </td>
+                            <td class="px-3 py-1.5 font-mono text-gray-700 dark:text-gray-300">{req.method}</td>
+                            <td class="max-w-[180px] truncate px-3 py-1.5 font-mono text-gray-900 dark:text-gray-100" title={req.model}>
+                              {req.model !== "unknown" ? req.model : "-"}
+                            </td>
+                            <td class="max-w-[160px] truncate px-3 py-1.5 text-gray-600 dark:text-gray-400" title={req.account || ""}>
+                              {req.account ? (
+                                <span class="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                                  {req.account}
+                                </span>
+                              ) : (
+                                <span class="text-gray-300 dark:text-gray-600">-</span>
+                              )}
+                            </td>
+                            <td class="max-w-[200px] truncate px-3 py-1.5 font-mono text-gray-500 dark:text-gray-400" title={req.path}>
+                              {req.path}
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-gray-500 dark:text-gray-400">
+                              {formatDuration(req.durationMs)}
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-gray-500 dark:text-gray-400">
+                              {req.tokensIn != null ? req.tokensIn.toLocaleString() : "-"}
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-gray-500 dark:text-gray-400">
+                              {req.tokensOut != null ? req.tokensOut.toLocaleString() : "-"}
+                            </td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </Show>
+              </Show>
+            </div>
+          </Show>
+
           {/* Server Logs Tab */}
           <Show when={activeTab() === "server"}>
             {/* Filters */}
