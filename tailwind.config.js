@@ -5,6 +5,17 @@ export default {
   plugins: [require("@kobalte/tailwindcss")],
   theme: {
     extend: {
+      fontFamily: {
+        sans: [
+          '"Quicksand"',
+          "system-ui",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"Segoe UI"',
+          "Roboto",
+          "sans-serif",
+        ],
+      },
       animation: {
         "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
       },

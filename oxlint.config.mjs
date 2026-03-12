@@ -44,8 +44,8 @@ export default defineConfig({
     // useEffect args — SolidJS uses createEffect, not useEffect
     "@nkzw/require-use-effect-arguments": "off",
     // --- Project-specific adjustments ---
-    // Allow console in non-production code (we use toast for user-facing errors)
-    "no-console": "warn",
+    // Allow console.error and console.warn in non-production code (we use toast for user-facing errors)
+    "no-console": ["warn", { allow: ["error", "warn"] }],
     // Array<T> style — keep existing T[] style
     "@typescript-eslint/array-type": "off",
     // SolidJS utility functions inside components are idiomatic (not closures, just colocation)

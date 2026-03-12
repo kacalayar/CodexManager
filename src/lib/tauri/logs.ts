@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // Request log for live monitoring
 export interface RequestLog {
+  account?: string;
   durationMs: number;
   id: string;
   method: string;
@@ -11,10 +12,9 @@ export interface RequestLog {
   provider: string;
   status: number;
   timestamp: number;
+  tokensCached?: number;
   tokensIn?: number;
   tokensOut?: number;
-  tokensCached?: number;
-  account?: string;
 }
 
 export async function onRequestLog(callback: (log: RequestLog) => void): Promise<UnlistenFn> {

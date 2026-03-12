@@ -51,20 +51,6 @@ export interface ClaudeQuotaResult {
   sevenDayResetAt?: number;
 }
 
-export interface KiroQuotaResult {
-  accountEmail: string;
-  bonusCreditsExpiresDays?: number;
-  bonusCreditsTotal: number;
-  bonusCreditsUsed: number;
-  error?: string;
-  fetchedAt: string;
-  plan: string;
-  resetsOn?: string;
-  totalCredits: number;
-  usedCredits: number;
-  usedPercent: number;
-}
-
 export async function fetchAntigravityQuota(): Promise<AntigravityQuotaResult[]> {
   return invoke("fetch_antigravity_quota");
 }
@@ -79,8 +65,4 @@ export async function fetchCopilotQuota(): Promise<CopilotQuotaResult[]> {
 
 export async function fetchClaudeQuota(): Promise<ClaudeQuotaResult[]> {
   return invoke("fetch_claude_quota");
-}
-
-export async function fetchKiroQuota(): Promise<KiroQuotaResult[]> {
-  return invoke("fetch_kiro_quota");
 }

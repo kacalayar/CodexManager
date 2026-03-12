@@ -410,9 +410,6 @@ export const en = {
       modelsConfigured: "Models Configured",
       total: "total",
     },
-    kiro: {
-      title: "Kiro Quota",
-    },
     kpi: {
       estimatedCost: "Est. Cost",
       failedCount: "{{count}} failed",
@@ -520,22 +517,6 @@ export const en = {
     proxyNotRunning: "Proxy Not Running",
     proxyNotRunningDescription: "Start the proxy server to view logs.",
     remaining: "remaining",
-    searchPlaceholder: "Search logs...",
-    selectAnErrorLog: "Select an Error Log",
-    selectLogFromLeft: "Select a log file from the left to view its contents.",
-    tabs: {
-      errors: "Errors",
-      requests: "Requests",
-      server: "Server",
-    },
-    title: "Logs",
-    toasts: {
-      failedToClearLogs: "Failed to clear logs",
-      failedToLoadErrorLog: "Failed to load error log",
-      failedToLoadLogs: "Failed to load logs",
-      logsCleared: "Logs cleared",
-      logsDownloaded: "Logs downloaded",
-    },
     requests: {
       account: "Account",
       allStatuses: "All",
@@ -554,6 +535,22 @@ export const en = {
       tokensIn: "Tokens In",
       tokensOut: "Tokens Out",
       totalRequests: "{{count}} requests",
+    },
+    searchPlaceholder: "Search logs...",
+    selectAnErrorLog: "Select an Error Log",
+    selectLogFromLeft: "Select a log file from the left to view its contents.",
+    tabs: {
+      errors: "Errors",
+      requests: "Requests",
+      server: "Server",
+    },
+    title: "Logs",
+    toasts: {
+      failedToClearLogs: "Failed to clear logs",
+      failedToLoadErrorLog: "Failed to load error log",
+      failedToLoadLogs: "Failed to load logs",
+      logsCleared: "Logs cleared",
+      logsDownloaded: "Logs downloaded",
     },
   },
   oauth: {
